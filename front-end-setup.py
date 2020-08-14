@@ -18,14 +18,14 @@ def valid_year(year):
     return True
 
 
-num_users = 1000
-survey_length = 50
-num_top_books = 250
-num_results = 25
+NUM_USERS = 1000
+SURVEY_LENGTH = 50
+NUM_TOP_BOOKS = 500
+NUM_RESULTS = 25
 
-num_top_match = 50
-bias = 0.3
-min_count = 2
+NUM_TOP_MATCH = 50
+BIAS = 0.3
+MIN_COUNT = 2
 
 rng = np.random.default_rng()
 
@@ -33,42 +33,47 @@ myclient = pymongo.MongoClient(uri, retryWrites=False)
 mydb = myclient.get_default_database()
 mycol_ratings = mydb['ratings']
 mycol_books = mydb['books']
-mydocs_ratings = mycol_ratings.aggregate([{'$sample': {'size': num_users}}])
+mydocs_ratings = mycol_ratings.aggregate([{'$sample': {'size': NUM_USERS}}])
 
 csr_userid = []
-csr_bookid = []
+csr_isbn = []
 csr_rating = []
 
 for document in mydocs_ratings:
     doc_userid = document['_id']
-    doc_bookid = document['bookId']
+    doc_isbn = document['ISBN']
     doc_rating = document['rating']
 
     csr_userid.extend([doc_userid] * len(doc_rating))
-    csr_bookid.extend(doc_bookid)
+    csr_isbn.extend(doc_isbn)
     csr_rating.extend(doc_rating)
 
+bookid_to_isbn = list(set(csr_isbn))
+isbn_to_bookid = {isbn: bookid for bookid, isbn in enumerate(bookid_to_isbn)}
+
+csr_bookid = [isbn_to_bookid[isbn] for isbn in csr_isbn]
 books_count = Counter(csr_bookid)
 books_count_keys = list(books_count.keys())
 books_count_values = list(books_count.values())
-
 book_counts = csr_matrix((books_count_values, ([0] * len(books_count_keys), books_count_keys))).toarray()[0]
-
 max_bookid = book_counts.shape[0]
+book_ids_top = np.argsort(book_counts)[::-1][:NUM_TOP_BOOKS]
 
-book_ids_top = np.argsort(book_counts)[::-1][:num_top_books]
-print([books_count[i] for i in book_ids_top])
 book_survey_id = []
 book_survey_title = []
 book_survey_author = []
 
-for book_id in rng.choice(book_ids_top, survey_length, replace=False):
-    book_survey_id.append(int(book_id))
-    doc = mycol_books.find_one({'_id': int(book_id)})
-    print(book_id)
-    print(doc)
-    book_survey_title.append(doc['Title'])
-    book_survey_author.append(doc['Author'])
+n_books_survey = 0
+for book_id in rng.choice(book_ids_top, NUM_TOP_BOOKS, replace=False):
+
+    doc = mycol_books.find_one({'_id': bookid_to_isbn[book_id]})
+    if doc is not None:
+        book_survey_id.append(int(book_id))
+        book_survey_title.append(doc['Title'])
+        book_survey_author.append(doc['Author'])
+        n_books_survey += 1
+        if n_books_survey >= SURVEY_LENGTH:
+            break
 
 # USER INPUT STARTS
 
@@ -99,17 +104,17 @@ else:
                              shape=(1, max_bookid + 1)).toarray()[0]
 
     match = X.dot(user_vector)
-    match_idx = np.argsort(match)[::-1][:num_top_match]
+    match_idx = np.argsort(match)[::-1][:NUM_TOP_MATCH]
     match_sum = np.sum(match[match_idx])
 
     if match_sum == 0:
         match_sum = 1
 
-    match_proba = np.reshape(match[match_idx] / match_sum * num_top_match, (-1, 1))
+    match_proba = np.reshape(match[match_idx] / match_sum * NUM_TOP_MATCH, (-1, 1))
 
     results_nnz = X[match_idx].getnnz(axis=0)
     results_sum = X[match_idx].multiply(match_proba).sum(axis=0)
-    results_vector = np.array((results_sum[0] / (results_nnz + bias)))[0]
+    results_vector = np.array((results_sum[0] / (results_nnz + BIAS)))[0]
     result_ids = np.argsort(results_vector)[::-1]
 
     results_count = 0
@@ -124,15 +129,15 @@ else:
     for book_id in result_ids[:1000]:
 
         if user_vector[book_id] == 0:
-            if results_nnz[book_id] >= min_count:
-                doc = mycol_books.find_one({'_id': int(book_id)})
+            if results_nnz[book_id] >= MIN_COUNT:
+                doc = mycol_books.find_one({'_id': bookid_to_isbn[book_id]})
 
                 if doc is not None:
 
                     title = doc['Title']
                     author = doc['Author']
                     year = doc['Year'] if valid_year(doc['Year']) else 'Unavailable'
-                    isbn = doc['ISBN']
+                    isbn = doc['_id']
                     image = doc['Image-URL']
 
                     percent_match.append(
@@ -145,7 +150,7 @@ else:
 
                     results_count += 1
 
-                    if results_count == num_results:
+                    if results_count == NUM_RESULTS:
                         break
 
     # RESULTS
@@ -154,4 +159,4 @@ else:
 
     for i in range(results_count):
         print(
-            f'{percent_match[i]} | "{book_title[i]}" by {book_author[i]} \t| Year: {book_year[i]} | ISBN: {book_isbn[i]} | Cover: {book_image[i]}')
+            f'{percent_match[i]} | Counts: {results_nnz[isbn_to_bookid[book_isbn[i]]]}| "{book_title[i]}" by {book_author[i]} \t| Year: {book_year[i]} | ISBN: {book_isbn[i]} | Cover: {book_image[i]}')

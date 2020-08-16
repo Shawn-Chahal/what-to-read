@@ -4,8 +4,7 @@ from collections import Counter
 import pandas as pd
 import pymongo
 
-N_USERS = 10000
-STATUS_FREQUENCY = 30  # seconds
+MIN_VOTES = 10
 
 df_ratings = pd.read_csv(os.path.join('BX-CSV-Dump', 'BX-Book-Ratings.csv'), sep=';',
                          dtype={"User-ID": int, "ISBN": str, "Book-Rating": int})
@@ -19,7 +18,9 @@ rating_max = df_ratings['Book-Rating'].max()
 df_ratings['Book-Rating'] = df_ratings['Book-Rating'].map(
     lambda x: (x - rating_min) / (rating_max - rating_min) * 2 - 1)
 
-top_users = [user_id for user_id, count in Counter(df_ratings['User-ID'].to_list()).most_common(N_USERS)]
+set_users = set(df_ratings['User-ID'])
+counter_users = Counter(df_ratings['User-ID'].to_list())
+top_users = [user_id for user_id in set_users if counter_users[user_id] >= MIN_VOTES]
 
 df_ratings.drop(
     [index for index, user_id in zip(df_ratings.index, df_ratings['User-ID']) if user_id not in top_users],
